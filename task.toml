@@ -1,0 +1,27 @@
+version = "2.0"
+
+[metadata]
+author_name = "anonymous"
+author_email = "anonymous"
+difficulty = "medium"
+category = "software-engineering"
+expert_time_estimate_min = 60
+junior_time_estimate_min = 120
+tags = ["zephyr", "DSP", "FSK", "embedded", "demodulator", "c"]
+subcategories = ["tool_specific"]
+number_of_milestones = 0
+codebase_size = "minimal"
+languages = ["python", "bash", "c"]
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 1200.0 # increase to allow west to build
+allow_internet = false
+cpus = 2
+memory_mb = 8192
+storage_mb = 20000
