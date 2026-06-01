@@ -20,6 +20,10 @@ static const char *WORD_BANK[NUM_WORDS] = {"DEEP", "WAVE", "SYNC", "BAUD",
 #define INITIAL_IDLE_TIME 5.0 // Seconds of continuous Mark before first packet
 #define INTER_PACKET_IDLE_TIME 11.0 // Seconds of continuous Mark between loops
 
+// --- Interferer Hopping Bounds ---
+#define INT_MIN_OFFSET 10.0
+#define INT_MAX_OFFSET 15.0
+
 // --- UART Framing (8N1) ---
 typedef enum {
   BIT_START = 0,
@@ -43,7 +47,9 @@ static const char *secret_word = NULL;
 static char tx_buffer[PACKET_SIZE];
 static double true_carrier_freq = 0.0;
 static double true_interferer_freq = 0.0;
+static double true_baud_rate = 0.0;
 static int initialized = 0;
+static int current_loop_index = -1;
 
 // Box-Muller transform for AWGN
 static double generate_gaussian_noise(double stddev) {
@@ -76,19 +82,23 @@ void fill_adc_buf(adc_buf_t *buf) {
     tx_buffer[PAYLOAD_SIZE] = hex_chars[(checksum >> 4) & 0x0F];
     tx_buffer[PAYLOAD_SIZE + 1] = hex_chars[checksum & 0x0F];
 
-    // 4. Carrier: Nominal +/- 10 ppm (+/- 0.215 Hz at 21.5 kHz)
-    double ppm_tolerance = NOMINAL_CARRIER_FREQ * 10.0e-6;
+    // 4. Carrier: Nominal +/- 10 ppm
+    double ppm_tolerance =
+        NOMINAL_CARRIER_FREQ * (CARRIER_TOLERANCE_PPM / 1000000.0);
     double ppm_error =
         ((double)rand() / RAND_MAX) * (2.0 * ppm_tolerance) - ppm_tolerance;
     true_carrier_freq = NOMINAL_CARRIER_FREQ + ppm_error;
 
-    // 5. Interferer: +/- 10 Hz away from the actual carrier
-    int sign = (rand() % 2 == 0) ? 1 : -1;
-    true_interferer_freq = true_carrier_freq + (sign * 10.0);
+    // 5. Baud Rate: Nominal +/- 2%
+    double baud_tolerance =
+        NOMINAL_BAUD_RATE * (BAUD_TOLERANCE_PERCENT / 100.0);
+    double baud_error =
+        ((double)rand() / RAND_MAX) * (2.0 * baud_tolerance) - baud_tolerance;
+    true_baud_rate = NOMINAL_BAUD_RATE + baud_error;
 
     printf("[MOCK_ENV] SECRET_WORD: %s\n", secret_word);
     printf("[MOCK_ENV] CARRIER_FREQ: %.3f Hz\n", true_carrier_freq);
-    printf("[MOCK_ENV] INTERFERER_FREQ: %.3f Hz\n", true_interferer_freq);
+    printf("[MOCK_ENV] BAUD_RATE: %.3f Hz\n", true_baud_rate);
 
     initialized = 1;
   }
@@ -96,8 +106,8 @@ void fill_adc_buf(adc_buf_t *buf) {
   int16_t *buffer = buf->adc_buf;
   double dt = 1.0 / SAMPLE_RATE;
 
-  // Calculate dynamic durations
-  double packet_tx_time = (PACKET_SIZE * BITS_PER_BYTE) / BAUD_RATE;
+  // Calculate dynamic durations based on the drifted true baud rate
+  double packet_tx_time = (PACKET_SIZE * BITS_PER_BYTE) / true_baud_rate;
   double loop_duration = packet_tx_time + INTER_PACKET_IDLE_TIME;
   double total_tx_window = MAX_LOOPS * loop_duration;
 
@@ -108,11 +118,31 @@ void fill_adc_buf(adc_buf_t *buf) {
     // Timeline check
     if (global_time >= INITIAL_IDLE_TIME &&
         global_time < (INITIAL_IDLE_TIME + total_tx_window)) {
+
+      // Calculate which loop we are currently in
+      int loop_idx = (int)((global_time - INITIAL_IDLE_TIME) / loop_duration);
+
+      // Hopping Interferer: If we entered a new loop, change the interferer
+      // frequency
+      if (loop_idx != current_loop_index) {
+        current_loop_index = loop_idx;
+        double offset = INT_MIN_OFFSET + ((double)rand() / RAND_MAX) *
+                                             (INT_MAX_OFFSET - INT_MIN_OFFSET);
+        if (rand() % 2 == 0)
+          offset = -offset;
+        true_interferer_freq = true_carrier_freq + offset;
+
+        if (loop_idx == 0) {
+          printf("[MOCK_ENV] INITIAL_INTERFERER_FREQ: %.3f Hz\n",
+                 true_interferer_freq);
+        }
+      }
+
       double active_time = fmod(global_time - INITIAL_IDLE_TIME, loop_duration);
 
       if (active_time < packet_tx_time) {
         // Packet Transmission Window
-        int total_bits = (int)(active_time / BAUD_RATE);
+        int total_bits = (int)(active_time * true_baud_rate);
         int byte_index = total_bits / BITS_PER_BYTE;
         int bit_index = total_bits % BITS_PER_BYTE;
 
@@ -128,14 +158,15 @@ void fill_adc_buf(adc_buf_t *buf) {
           bit_val = 1; // Stop Bit
         }
 
-        current_freq += (bit_val == 1) ? FSK_DEVIATION : -FSK_DEVIATION;
+        current_freq +=
+            (bit_val == 1) ? FSK_PEAK_DEVIATION : -FSK_PEAK_DEVIATION;
       } else {
         // Inter-packet gap (Continuous Mark)
-        current_freq += FSK_DEVIATION;
+        current_freq += FSK_PEAK_DEVIATION;
       }
     } else {
       // Initial startup gap OR dead-air after max loops (Continuous Mark)
-      current_freq += FSK_DEVIATION;
+      current_freq += FSK_PEAK_DEVIATION;
     }
 
     // Integrate phases

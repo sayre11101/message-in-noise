@@ -1,8 +1,11 @@
 #!/bin/bash
 set -e
 
-# Overwrite the scaffold with the Oracle reference solution
-cat > main.c << 'EOF'
+echo "Generating reference solution in /app/main.c..."
+
+mkdir -p /app
+
+cat > /app/main.c << 'EOF'
 #include <zephyr/kernel.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -59,7 +62,7 @@ void generate_filter(void) {
         // Beat against local oscillator (Superheterodyne)
         double lo_angle = 2.0 * M_PI * NOMINAL_CARRIER_FREQ * n / SAMPLE_RATE;
         double coef_I = h_n * cos(lo_angle);
-        double coef_Q = h_n * -sin(lo_angle);
+        double coef_Q = h_n * sin(lo_angle); // FIXED: Positive sin() for positive frequency shift
 
         // Convert to 32-bit fixed point (Q30)
         fir_coef_I[i] = (int32_t)(coef_I * (1 << 30));
@@ -73,9 +76,17 @@ int main(void) {
     memset(history_buffer, 0, sizeof(history_buffer));
 
     int64_t prev_I = 0, prev_Q = 0;
+    int frame_count = 0;
 
     while (1) {
         fill_adc_buf(&current_frame);
+
+        // --- Progress Tracker (125 frames = 1 simulated second) ---
+        frame_count++;
+        if (frame_count % 125 == 0) {
+            printf("[ORACLE] Processed %d simulated seconds...\n", frame_count / 125);
+            fflush(stdout);
+        }
 
         // 1. Push new 1024 samples into circular buffer
         for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
@@ -151,7 +162,12 @@ int main(void) {
                                 printf("DECODED: %s\n", packet_buffer);
                                 return 0; // Success!
                             }
+                            else {
+                                printf("[ORACLE] Checksum mismatch! Expected %c%c, got %c%c. Retrying next loop...\n", 
+                                        expected_upper, expected_lower, packet_buffer[PAYLOAD_SIZE], packet_buffer[PAYLOAD_SIZE+1]);
+                            }
                             // If checksum fails, reset and keep listening
+                            printf("[ORACLE] UART Framing Error at byte index %d! Retrying...\n", packet_index);
                             packet_index = 0; 
                         }
                     } else {
@@ -167,4 +183,4 @@ int main(void) {
 }
 EOF
 
-echo "Oracle main.c successfully generated."
+echo "Oracle reference solution written to /app/main.c."

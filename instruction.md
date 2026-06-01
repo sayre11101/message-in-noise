@@ -1,30 +1,43 @@
-# Zephyr RTOS: DSP & FSK Demodulator
+# Zephyr RTOS: High-Noise FSK Demodulator
 
 ## Background
 
-This is a Zephyr RTOS project. The concept is that there is a secret message encoded by FSK at the generator of a power station. The power line frequency is approximately 60Hz and steady over the period of the message, except for a +/- 0.05Hz FSK modulation that encodes an NRZ 8N1 ASCII message at a 1Hz baud rate.
+You are tasked with writing a Digital Signal Processing (DSP) pipeline in C for the Zephyr RTOS to decode a weak FSK signal buried in heavy broadband Additive White Gaussian Noise (AWGN). In addition to the noise (~20dB SNR in 1Hz BW), there is a massive unmodulated interfering carrier (+10dB above our signal) that will actively attempt to mask the transmission.
 
-The API provides you with a hardware abstraction layer (HAL) to read the power line voltage. Every time you call `fill_adc_buf`, you receive frames of 2048 samples of right-justified 12-bit unsigned data (ranging from 0 to 4095). You adjust the ADC sampling hardware to track the line by calling `set_adc_sampling_frequency(double target_hz)`.
+Because of the extreme dynamic range between the +10dB interferer and the weak baseband signal, standard 32-bit floating-point accumulators may suffer from catastrophic cancellation during heavy FIR filtering. **You are strongly encouraged to use fixed-point arithmetic with 64-bit (`int64_t`) or 128-bit (`__int128_t`) integers for your DSP implementation.**
 
-Your goal is to decode the message. The Oracle solution uses a software Phase-Locked Loop (PLL), but you do not have to use a PLL. Any DSP algorithm is acceptable to pass this challenge.
+## The API
 
-## Parameters
+The environment provides a hardware abstraction layer to sample the incoming RF signal.
 
-- **The Carrier:** The base grid frequency is randomized between 58.0 Hz and 62.0 Hz.
-- **The Modulation:** The carrier contains a microscopic FSK signal.
-  - **Mark (Binary 1 / Idle):** Carrier + 0.05 Hz
-  - **Space (Binary 0 / Start):** Carrier - 0.05 Hz
-- **The Preamble:** the message begins with a preamble of 5 seconds of "mark" bits before the first start bit
-- **The Protocol:** Standard 8N1 serial framing (1 Start bit, 8 Data bits LSB-first, 1 Stop bit).
-- **The Clock Recovery:** The baud rate is nominally 1 baud, but the actual transmission rate is randomized by **+/- 2%** (between 0.98 and 1.02 seconds per bit, remaining constant over the length of the message).
+* Call `fill_adc_buf(adc_buf_t *buf)` to receive blocks of 16-bit signed integer samples.
+* The data structures, buffer lengths, and physical constants are all explicitly defined for you in `adc_buf.h`.
 
-## Assignment
+## Signal Specifications
 
-- Populate the `main.c` template that is provided in the container.
-  - Initialize the sampling frequency.
-  - Read blocks of data for a number times defined by `NUMBER_OF_ADC_FRAMES` in the `adc_buf.h` header.
-  - Process the data to decode the hidden FSK message up to the maximum of `MAX_MESSAGE_LENGTH` defined in `adc_buf.h`.
-  - The message is ascii from 32 to 126 terminated with '\0'
-  - Print out the message utilizing the code provided at the bottom of the `main.c` scaffold:
-    - `printf("DECODED: %s\n", decoded_message);`
-  
+Please refer to the `adc_buf.h` header file for all exact numerical constants.
+
+* **Sampling & Carrier:** The ADC samples at `SAMPLE_RATE`. The target FSK signal is centered near `NOMINAL_CARRIER_FREQ`, subject to a physical crystal drift up to `CARRIER_TOLERANCE_PPM`.
+* **Modulation:** Continuous-phase FSK. Mark (idle/1) is the higher frequency, Space (start/0) is the lower frequency. The peak deviation from the center carrier is `FSK_PEAK_DEVIATION`.
+* **Baud Rate:** Standard 8N1 serial framing (1 Start bit, 8 Data bits LSB-first, 1 Stop bit) at `NOMINAL_BAUD_RATE`. The actual transmission rate may drift by up to `BAUD_TOLERANCE_PERCENT` and will remain constant for the duration of the simulation.
+
+## The RF Environment Constraints
+
+* **Hopping Interferer:** The +10dB interfering carrier is located at least 10.0 Hz away from the actual carrier frequency (either above or below). To defeat static notch filters, the interferer will randomly hop to a new frequency offset during the dead-air between packet loops.
+* **Transmission Timeline:** After an initial idle period of continuous "Mark" tone, the transmitter will repeatedly loop the target packet, separated by continuous "Mark" idle periods.
+
+## Packet Structure
+
+The transmitter sends a `PACKET_SIZE` byte packet, strictly defined as `fsk_packet_t` in the header:
+
+* **Payload (Bytes 0 to `PAYLOAD_SIZE - 1`):** A C-string payload. The secret message is randomly generated but guaranteed to be null-padded (`\0`) so it always forms a valid, printable string.
+* **Checksum (The final `CHECKSUM_SIZE` bytes):** A 2-character ASCII Hexadecimal representation of the modulo-256 sum of the payload bytes.
+* *Example:* If the modulo-256 sum of the payload bytes is `0x4A`, the first checksum byte will be `'4'` and the second will be `'A'`.
+
+## Output Requirement
+
+Your objective is to ingest the raw ADC samples, filter the interferer, synchronize to the baud rate, slice the bits, frame the UART bytes, and validate the checksum.
+
+Once your code successfully recovers a packet and the checksum matches, print the payload exactly as follows:
+
+* `printf("DECODED: %s\n", packet.payload);`
