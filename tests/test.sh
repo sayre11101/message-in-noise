@@ -5,33 +5,17 @@ set -euo pipefail
 mkdir -p /logs/verifier
 mkdir -p /tmp/eval
 
-echo "Staging build environment in /tmp/eval..."
-
-# 1. Grab configs and the hardware emulator directly from the /tests mount
-cp /tests/CMakeLists.txt /tmp/eval/
-cp /tests/prj.conf /tmp/eval/
-cp /tests/mock_adc.c /tmp/eval/
-cp /tests/adc_buf.h /tmp/eval/
-
-# disable errexit
-set +e
-
-# 2. Grab the agent's generated code
-if [ ! -f /app/main.c ]; then
-    echo "FAIL: Agent did not generate /app/main.c"
-    echo 0 > /logs/verifier/reward.txt
-    exit 1
-fi
-cp /app/main.c /tmp/eval/
-
 echo "========================================"
-echo "          AGENT GENERATED CODE          "
+echo "          AGENT GENERATED main.c          "
 echo "========================================"
-cat /tmp/eval/main.c
+cat /app/main.c
 echo -e "\n========================================"
 
-# Navigate to the isolated sandbox
-cd /tmp/eval
+echo "========================================"
+echo "          AGENT GENERATED dsp.c          "
+echo "========================================"
+cat /app/dsp.c
+echo -e "\n========================================"
 
 # 3. Compile the Zephyr application
 echo "Building Zephyr application..."
@@ -48,7 +32,7 @@ fi
 echo "=== RUNNING SIMULATION ==="
 # 'timeout' prevents infinite loops.
 # 'tee' prints to the terminal AND saves to the file Pytest is looking for.
-timeout 45 ./build/zephyr/zephyr.exe | tee /tmp/eval/agent_output.txt
+timeout -k 5 45 ./build/zephyr/zephyr.exe | tee /tmp/eval/agent_output.txt
 
 # Capture the exit code of the simulation
 EXIT_CODE=${PIPESTATUS[0]}

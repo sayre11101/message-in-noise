@@ -64,6 +64,10 @@ RUN git config --global user.email "agent@example.com" && \
 # ---------------------------------------------------------
 RUN mkdir -p /app
 WORKDIR /app
-COPY instruction.md /app/instruction.md
 COPY main.c /app/main.c
 COPY adc_buf.h /app/
+COPY dsp.h /app/
+COPY dsp.c /app/
+COPY prj.conf /app/
+COPY mock_adc.c /app/
+COPY CMakeLists.txt /app/
