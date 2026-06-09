@@ -1,16 +1,24 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(fsk_demod)
+project(hardware_pll)
 
-# Always compile the Mock Environment and the DSP file
-target_sources(app PRIVATE mock_adc.c dsp.c)
+# 1. Add the agent's source files
+target_sources(app PRIVATE 
+    main.c 
+    dsp_mixer.c
+    fsk_slicer.c
+)
 
-# Conditionally compile the entry point based on the unit test flag
-if(BUILD_UNIT_TEST)
-    message(STATUS "=== BUILDING FILTER UNIT TEST ===")
-    target_sources(app PRIVATE test_filter.c)
-else()
-    message(STATUS "=== BUILDING MAIN APPLICATION ===")
-    target_sources(app PRIVATE main.c)
-endif()
+# 2. Add the hardware emulator injected by the test suite
+target_sources(app PRIVATE 
+    mock_generator.c
+)
+
+# 3. Defensive Include Paths (Matches our Python grader logic)
+target_include_directories(app PRIVATE 
+    /environment/headers
+    /app/headers
+    /app
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)

@@ -1,50 +1,51 @@
-#include <math.h>
-#include <stdint.h>
+#include "adc_buf.h"
+#include "dsp_mixer.h"
+#include "fsk_slicer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 
-#include "adc_buf.h"
-
-// Note to Agent:
-// You are tasked with decoding a weak FSK signal buried in heavy broadband
-// noise. There is also a massive interfering carrier (+10dB above our signal)
-// sitting at an unknown offset from the nominal 21.5 kHz carrier.
-//
-// Floating point arithmetic (32-bit float) may lack the precision necessary to
-// accumulate large FIR filters without catastrophic cancellation due to the
-// noise and interferer. You are strongly encouraged to use fixed-point integer
-// math (e.g., int64_t) for your filtering and mixing stages.
-//
-// The transmitter loops a 16-byte packet:
-// - Bytes 0-13: The payload (null-padded).
-// - Bytes 14-15: A 2-character ASCII Hex checksum (modulo-256 sum of bytes
-// 0-13).
-//
-// When you successfully decode and validate a packet via its checksum,
-// print it strictly as: printf("DECODED: %s\n", payload);
+// Define the maximum number of simulation frames to prevent infinite loops
+#define NUMBER_OF_ADC_FRAMES 25000
 
 static adc_buf_t current_frame;
 
 int main(void) {
-  printf("Starting Sub-Noise FSK Demodulator...\n");
+  /*
+   * TODO: 1. Initialize your DSP and FSK modules
+   * dsp_mixer_init();
+   * fsk_slicer_init();
+   *
+   * Hint: You will need state variables to track packet buffering
+   * char packet_buffer[PACKET_SIZE + 1];
+   * int packet_index = 0;
+   */
 
-  while (1) {
-    // Fetch 8ms of raw 16-bit RF data (128 kHz sample rate)
+  for (int i = 0; i < NUMBER_OF_ADC_FRAMES; i++) {
+    // Fetch a block of raw ADC samples containing the FSK signal,
+    // the heavy AWGN, and the +10dB hopping interferer.
     fill_adc_buf(&current_frame);
 
-    // ==============================================================================
-    // TODO: Implement your Digital Down Converter (DDC) and FSK Demodulator
-    // here.
-    //
-    // 1. Shift the 21.5 kHz carrier to baseband (Mixer).
-    // 2. Filter out the noise and the interfering carrier.
-    // 3. Determine if the remaining baseband energy is positive (Mark) or
-    // negative (Space).
-    // 4. Recover the 1-baud 8N1 bitstream.
-    // 5. Framer: Extract the 16-byte packet, validate the checksum, and print.
-    // ==============================================================================
+    /*
+     * TODO: 2. Pass the buffer to your DSP mixer to filter the interference
+     * int64_t cross_product;
+     * int bit_val = dsp_mixer_process(current_frame.adc_buf, &cross_product,
+     * NULL);
+     *
+     * TODO: 3. Pass the sliced bit to your FSK slicer
+     * char new_char;
+     * if (fsk_slicer_process(bit_val, &new_char)) {
+     * * TODO: 4. Buffer the received bytes into the packet structure.
+     * Hint: Watch out for the continuous "Mark" idle periods!
+     * * TODO: 5. Once a full PACKET_SIZE is received, validate the checksum.
+     * Calculate the modulo-256 sum of the payload bytes and compare
+     * it against the 2-byte ASCII Hex checksum at the end of the packet.
+     * * If the checksum is valid, print the payload and exit!
+     * printf("DECODED: %s\n", packet_buffer);
+     * break;
+     * }
+     */
   }
 
   return 0;

@@ -3,6 +3,7 @@ build/
 .cache/
 CMakeCache.txt
 CMakeFiles/
+bak/
 
 # Python & Pytest Caches
 __pycache__/

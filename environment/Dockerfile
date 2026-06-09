@@ -14,24 +14,21 @@ ENV ZEPHYR_SDK_VERSION=0.16.5
 # OPTIMIZATIONS: --no-install-recommends, removed ccache, apt-get clean
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git cmake ninja-build gperf dfu-util device-tree-compiler wget \
-    python3-dev python3-pip python3-setuptools python3-wheel xz-utils file \
-    make gcc gcc-multilib g++-multilib libsdl2-dev libmagic1 \
+    python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
+    xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev libmagic1 \
+    poppler-utils \
+    tesseract-ocr \
+    ghostscript \
     tmux \
-    asciinema \
-    curl ca-certificates \
+
+    tmux asciinema curl ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /var/tmp/*
 
 # ---------------------------------------------------------
-# 2. Install uv package manager
+# 2. install pytest
 # ---------------------------------------------------------
-RUN curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
-
-# ---------------------------------------------------------
-# 3. Pre-warm the offline cache
-# ---------------------------------------------------------
-RUN uvx -p 3.12 -w pytest==8.4.1 -w pytest-json-ctrf==0.3.5 pytest --version
+RUN pip3 install --no-cache-dir pytest==8.4.1 pytest-json-ctrf==0.3.5
 
 # ---------------------------------------------------------
 # 4. Download and Install the Zephyr SDK (MINIMAL VERSION)
@@ -60,14 +57,20 @@ RUN git config --global user.email "agent@example.com" && \
     rm -rf /root/.cache/pip /tmp/* /var/tmp/*
 
 # ---------------------------------------------------------
-# 6. Setup Agent Workspace
+# 6. Install the Agent's Custom PDF Tools Last
+# ---------------------------------------------------------
+# OPTIMIZATION: Clear pip caches after install
+RUN pip3 install --no-cache-dir PyMuPDF==1.24.2 pdfplumber==0.11.9 pypdf==5.0.1 && \
+    rm -rf /root/.cache/pip /tmp/* /var/tmp/*
+
+# ---------------------------------------------------------
+# 7. Setup Agent Workspace
 # ---------------------------------------------------------
 RUN mkdir -p /app
 WORKDIR /app
 COPY main.c /app/main.c
-COPY adc_buf.h /app/
-COPY dsp.h /app/
-COPY dsp.c /app/
-COPY prj.conf /app/
-COPY mock_adc.c /app/
+COPY dsp_mixer.c /app/
+COPY fsk_slicer.c /app/
 COPY CMakeLists.txt /app/
+COPY prj.conf /app/
+COPY headers/ /app/headers/

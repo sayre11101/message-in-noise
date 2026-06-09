@@ -1,0 +1,25 @@
+/ {
+	aliases {
+		si5351 = &si5351a;
+		adc = &ads8528_a;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+
+	si5351a: si5351a@60 {
+		compatible = "silabs,si5351a";
+		reg = <0x60>;
+	};
+};
+
+&spi0 {
+	status = "okay";
+
+	ads8528_a: ads8528@0 {
+		compatible = "ti,ads8528";
+		reg = <0x0>;
+		spi-max-frequency = <1000000>;
+	};
+};
