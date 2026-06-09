@@ -16,21 +16,36 @@
 #define FILTER_TAPS 65536
 #endif
 
-static int32_t fir_coef[FILTER_TAPS];
+static inline __attribute((always_inline)) int32_t to_q31(int64_t x) {
+  return (int32_t)(x >> 31);
+}
 
-static int16_t lo_table_I[LO_TABLE_SIZE];
-static int16_t lo_table_Q[LO_TABLE_SIZE];
+// GUARANTEE the block copy optimization and LO wrap are mathematically safe
+_Static_assert((FILTER_TAPS % SAMPLES_PER_FRAME) == 0,
+               "FILTER_TAPS must be an exact multiple of SAMPLES_PER_FRAME!");
+_Static_assert((LO_TABLE_SIZE % SAMPLES_PER_FRAME) == 0,
+               "LO_TABLE_SIZE must be a multiple of SAMPLES_PER_FRAME!");
 
-static int16_t history_buffer_I[FILTER_TAPS];
-static int16_t history_buffer_Q[FILTER_TAPS];
+static double fir_coef[FILTER_TAPS];
 
-static int32_t prev_I = 0;
-static int32_t prev_Q = 0;
+// Precalculated LO Look-Up Tables
+static double lo_table_I[LO_TABLE_SIZE];
+static double lo_table_Q[LO_TABLE_SIZE];
 
+// TWO history buffers for the premixed Baseband I and Q streams
+static double history_buffer_I[FILTER_TAPS];
+static double history_buffer_Q[FILTER_TAPS];
+
+// Array Heads and Pointers
 static int head = 0;
 static int lo_index = 0;
 
+static int64_t prev_I = 0;
+static int64_t prev_Q = 0;
+
+// RESTORED NAME: dsp_mixer_init
 void dsp_mixer_init(void) {
+  // 1. Generate the pure Real Low-Pass Filter (Baseband)
   double fc = 3.0 / SAMPLE_RATE;
 
   for (int i = 0; i < FILTER_TAPS; i++) {
@@ -42,22 +57,23 @@ void dsp_mixer_init(void) {
     } else {
       h_n = sin(2.0 * M_PI * fc * n) / (M_PI * n);
     }
-
     double blackman = 0.42 - 0.5 * cos(2.0 * M_PI * i / (FILTER_TAPS - 1)) +
                       0.08 * cos(4.0 * M_PI * i / (FILTER_TAPS - 1));
     h_n *= blackman;
 
-    // The Golden State: Q30 format scaling
-    fir_coef[i] = (int32_t)(h_n * (1 << 30));
+    // Notice: No LO baked in! Just the pure Real low-pass filter.
+    fir_coef[i] = h_n;
   }
 
+  // 2. Generate the Exact Period Local Oscillator LUT
   for (int i = 0; i < LO_TABLE_SIZE; i++) {
     double phase = 2.0 * M_PI * NOMINAL_CARRIER_FREQ * i / SAMPLE_RATE;
+    // Standard downconversion rotation: e^(-jwt) = cos(wt) - j*sin(wt)
     double lo_i = cos(phase);
     double lo_q = -sin(phase);
 
-    lo_table_I[i] = (int16_t)(lo_i * 32767.0);
-    lo_table_Q[i] = (int16_t)(lo_q * 32767.0);
+    lo_table_I[i] = lo_i;
+    lo_table_Q[i] = lo_q;
   }
 
   memset(history_buffer_I, 0, sizeof(history_buffer_I));
@@ -68,58 +84,60 @@ void dsp_mixer_init(void) {
   lo_index = 0;
 }
 
-int dsp_mixer_process(const int16_t *adc_buf, int64_t *cp_out,
-                      int64_t *ms_out) {
-  int bit_val = 0;
-
+// RESTORED NAME: dsp_mixer_process
+int dsp_mixer_process(const int16_t *frame, int64_t *opt_cross_prod,
+                      int64_t *opt_mag_sq) {
+  // --- 1. The Ultra-Fast Double Down Converter ---
   for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-    int32_t mixed_I = ((int32_t)adc_buf[i] * lo_table_I[lo_index]) >> 15;
-    int32_t mixed_Q = ((int32_t)adc_buf[i] * lo_table_Q[lo_index]) >> 15;
+    // Normalize ADC integer to [-1.0, 1.0] fractional space
+    double frame_val = ldexp((double)(frame[i]), -31);
 
-    lo_index++;
-    if (lo_index >= LO_TABLE_SIZE) {
-      lo_index = 0;
-    }
+    // Look up the precalculated LO values
+    history_buffer_I[head + i] = frame_val * lo_table_I[lo_index];
+    history_buffer_Q[head + i] = frame_val * lo_table_Q[lo_index];
 
-    history_buffer_I[head] = (int16_t)mixed_I;
-    history_buffer_Q[head] = (int16_t)mixed_Q;
-
-    // 64-bit Accumulator to prevent integer overflow
-    int64_t sum_I = 0;
-    int64_t sum_Q = 0;
-
-    for (int tap = 0; tap < FILTER_TAPS; tap++) {
-      // BITWISE AND MASK: Allows GCC to vectorize the loop, solving the
-      // timeout!
-      int idx = (head - tap + FILTER_TAPS) & (FILTER_TAPS - 1);
-
-      sum_I += (int64_t)history_buffer_I[idx] * fir_coef[tap];
-      sum_Q += (int64_t)history_buffer_Q[idx] * fir_coef[tap];
-    }
-
-    // Shift by 16 exactly ONCE at the end of the loop
-    int32_t filtered_I = (int32_t)(sum_I >> 16);
-    int32_t filtered_Q = (int32_t)(sum_Q >> 16);
-
-    int64_t cp =
-        ((int64_t)prev_I * filtered_Q) - ((int64_t)prev_Q * filtered_I);
-    int64_t ms =
-        ((int64_t)filtered_I * filtered_I) + ((int64_t)filtered_Q * filtered_Q);
-
-    prev_I = filtered_I;
-    prev_Q = filtered_Q;
-
-    if (cp > 0) {
-      bit_val = 1;
-    } else {
-      bit_val = 0;
-    }
-
-    *cp_out = cp;
-    *ms_out = ms;
-
-    head = (head + 1) & (FILTER_TAPS - 1);
+    // Advance the LO index and wrap flawlessly
+    lo_index = (lo_index + 1) & (LO_TABLE_SIZE - 1);
   }
 
-  return bit_val;
+  // Advance the head pointer cleanly
+  head = (head + SAMPLES_PER_FRAME) % FILTER_TAPS;
+
+  // Use 'double' to safely accumulate the microscopic products!
+  double acc_I = 0.0;
+  double acc_Q = 0.0;
+
+  // --- 2. The Baseband Low-Pass Filter ---
+  int read_idx = head;
+  for (int i = 0; i < FILTER_TAPS; i++) {
+    // Both I and Q use the exact same real low-pass coefficients!
+    acc_I += history_buffer_I[read_idx] * fir_coef[i];
+    acc_Q += history_buffer_Q[read_idx] * fir_coef[i];
+    read_idx = (read_idx + 1) % FILTER_TAPS;
+  }
+
+  // --- 3. Scale Back to Integer Space ---
+  // Restore integer magnitude before taking MagSq/Cross-Product
+  int64_t int_acc_I = (int64_t)ldexp(acc_I, 31);
+  int64_t int_acc_Q = (int64_t)ldexp(acc_Q, 31);
+
+  int64_t cross_prod = (prev_I * int_acc_Q) - (int_acc_I * prev_Q);
+  int64_t mag_sq = (int_acc_I * int_acc_I) + (int_acc_Q * int_acc_Q);
+
+  prev_I = int_acc_I;
+  prev_Q = int_acc_Q;
+
+  // Output raw math if pointers were provided
+  if (opt_cross_prod)
+    *opt_cross_prod = cross_prod;
+  if (opt_mag_sq)
+    *opt_mag_sq = mag_sq;
+
+  // --- 4. Squelch ---
+  if (mag_sq < 10000LL) {
+    return 1; // Squelched, force UART to IDLE (Mark)
+  }
+
+  // --- 5. ZERO-CROSSING GLORY ---
+  return (cross_prod > 0) ? 1 : 0;
 }
